@@ -1,0 +1,17 @@
+{
+  "name": "ai-batch-image-generator",
+  "version": "1.0.0",
+  "description": "极简前后端分离 AI 批量文生图系统，前端 Tailwind，后端 Express 中转国内聚合 API，可直接部署阿里云 Ubuntu。",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": "18.x"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^4.21.2"
+  }
+}
