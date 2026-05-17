@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "build": "vite build"
+    "build": "echo 'static build ok'"
   },
   "engines": {
     "node": "20.x"

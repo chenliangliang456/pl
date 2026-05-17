@@ -1,8 +1,13 @@
 {
   "buildCommand": "npm run build",
-  "outputDirectory": "dist",
+  "outputDirectory": ".",
+  "functions": {
+    "server.js": {
+      "runtime": "nodejs20.x"
+    }
+  },
   "rewrites": [
+    { "source": "/api/(.*)", "destination": "/server.js" },
     { "source": "/(.*)", "destination": "/index.html" }
-  ],
-  "installCommand": "npm install"
+  ]
 }
