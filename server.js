@@ -3,23 +3,25 @@ const cors = require('cors')
 require('dotenv').config()
 const app = express()
 
-// 托管静态前端
+// 允许跨域、解析JSON
 app.use(cors())
 app.use(express.json())
+
+// 托管静态文件（css、js、图片）
 app.use(express.static(__dirname))
 
-// 首页返回 index.html（必须加这行！）
-app.get('/', (req, res) => {
+// 关键：所有GET请求都返回index.html，让前端自己处理路由
+app.get('*', (req, res) => {
   res.sendFile(__dirname + '/index.html')
 })
 
-// 你的绘图接口，保留不动
+// 你的API接口，保持不变
 app.post('/api/generate', async (req, res) => {
   try {
     const { prompt } = req.body
     const apiKey = process.env.API_KEY
     const baseUrl = process.env.BASE_URL
-    // 这里是你原来的接口逻辑
+    // 你的原有接口逻辑写在这里
     res.json({ success: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
