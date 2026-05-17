@@ -1,27 +1,31 @@
-const express = require('express')
-const cors = require('cors')
-require('dotenv').config()
-const app = express()
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+require('dotenv').config();
+const app = express();
 
-// 只允许跨域、解析JSON
-app.use(cors())
-app.use(express.json())
+app.use(cors());
+app.use(express.json());
 
-// 只处理 API 请求
-app.post('/api/generate', async (req, res) => {
-  try {
-    const { prompt } = req.body
-    const apiKey = process.env.API_KEY
-    const baseUrl = process.env.BASE_URL
-    // --- 这里放你原来的接口逻辑 ---
-    res.json({ success: true, message: "接口正常" })
-  } catch (e) {
-    res.status(500).json({ error: e.message })
-  }
-})
+// 静态资源全部托管
+app.use(express.static(path.join(__dirname)));
 
-// 静态文件和首页都不在这里处理了
-const PORT = process.env.PORT || 3000
-app.listen(PORT, () => {
-  console.log(`API服务运行在 ${PORT}`)
-})
+// 只拦截接口，其余全给前端
+app.use('/api', (req,res,next)=>{
+  next();
+});
+
+// 所有页面请求全部返回首页，不跳转、不刷新
+app.get('*', (req,res)=>{
+  res.sendFile(path.join(__dirname,'index.html'));
+});
+
+// 你的生成接口原样放这里
+app.post('/api/generate', async (req,res)=>{
+
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT,()=>{
+  console.log('run');
+});
