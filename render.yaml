@@ -1,0 +1,17 @@
+# Render Blueprint：在 Dashboard 选 New → Blueprint 并指向本仓库，或手动创建 Web Service 对照下列配置
+services:
+  - type: web
+    name: ai-batch-image
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: '20'
+      - key: API_BASE_URL
+        sync: false
+      - key: API_KEY
+        sync: false

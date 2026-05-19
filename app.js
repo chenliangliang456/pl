@@ -1,4 +1,4 @@
-// 本地 Express 入口（Vercel 使用 api/*.js）
+// Express 入口：本地 / Render 用 server.js 启动；Vercel 另用 api/*.js
 
 require('dotenv').config();
 
