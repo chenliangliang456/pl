@@ -195,6 +195,20 @@
         });
       }
 
+      async function parseResponse(resp) {
+        const text = await resp.text();
+        try {
+          return { data: JSON.parse(text), raw: text };
+        } catch {
+          const preview = text.replace(/\s+/g, ' ').slice(0, 120);
+          throw new Error(
+            resp.ok
+              ? '服务器返回了非 JSON 内容'
+              : `服务异常 (${resp.status})：${preview || '无详情'}`
+          );
+        }
+      }
+
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         setLoading(true);
@@ -211,7 +225,7 @@
             })
           });
 
-          const data = await resp.json();
+          const { data } = await parseResponse(resp);
           if (!resp.ok) throw new Error(data.message || '生成失败');
 
           render(data.images || []);
