@@ -139,7 +139,7 @@
           if (data.maxCount && data.maxCount < 300) {
             countEl.max = data.maxCount;
             if (Number(countEl.value) > data.maxCount) countEl.value = data.maxCount;
-            countHint.textContent = `线上环境单次最多 ${data.maxCount} 张（避免超时），本地可更多`;
+            countHint.textContent = `线上单次最多 ${data.maxCount} 张；提交后由浏览器轮询出图，避免超时`;
           }
         })
         .catch(() => {});
@@ -209,10 +209,28 @@
         }
       }
 
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      async function pollOneTask(task, batchId) {
+        for (let i = 0; i < 45; i++) {
+          const resp = await fetch('/api/poll', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...task, batchId })
+          });
+          const { data } = await parseResponse(resp);
+          if (!resp.ok) throw new Error(data.message || '轮询失败');
+          if (data.status === 'completed') return data.image;
+          if (data.status === 'failed') throw new Error(data.message || '任务失败');
+          await sleep(4000);
+        }
+        throw new Error(`任务 ${task.taskId} 超时`);
+      }
+
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         setLoading(true);
-        message.textContent = '正在生成图片...';
+        message.textContent = '正在提交任务...';
 
         try {
           const resp = await fetch('/api/generate', {
@@ -226,11 +244,29 @@
           });
 
           const { data } = await parseResponse(resp);
-          if (!resp.ok) throw new Error(data.message || '生成失败');
+          if (!resp.ok) throw new Error(data.message || '提交失败');
 
-          render(data.images || []);
+          const tasks = data.tasks || [];
+          if (!tasks.length) throw new Error('未获取到任务');
+
+          message.textContent = `已提交 ${tasks.length} 个任务，正在出图（0/${tasks.length}）...`;
+
+          const images = [];
+          let done = 0;
+
+          await Promise.all(
+            tasks.map(async (task) => {
+              const image = await pollOneTask(task, data.batchId);
+              done += 1;
+              images.push(image);
+              message.textContent = `正在出图（${done}/${tasks.length}）...`;
+            })
+          );
+
+          images.sort((a, b) => a.id - b.id);
+          render(images);
           const dir = data.savedDir ? `，已自动保存到 ${data.savedDir}` : '';
-          message.textContent = `生成完成，共 ${data.images.length} 张${dir}`;
+          message.textContent = `生成完成，共 ${images.length} 张${dir}`;
         } catch (err) {
           message.textContent = err.message || '请求失败';
         } finally {

@@ -2,7 +2,11 @@
   "version": 2,
   "functions": {
     "api/generate.js": {
-      "maxDuration": 60,
+      "maxDuration": 30,
+      "memory": 1024
+    },
+    "api/poll.js": {
+      "maxDuration": 30,
       "memory": 1024
     },
     "api/health.js": {

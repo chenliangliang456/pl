@@ -1,11 +1,11 @@
-// 本地 Express 入口（Vercel 使用 api/generate.js、api/health.js）
+// 本地 Express 入口（Vercel 使用 api/*.js）
 
 require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { getHealthPayload, runGenerate } = require('./lib/generate');
+const { getHealthPayload, runSubmit, runPoll } = require('./lib/generate');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const app = express();
@@ -24,11 +24,21 @@ app.get('/api/health', (req, res) => {
 
 app.post('/api/generate', async (req, res) => {
   try {
-    const data = await runGenerate(req.body);
+    const data = await runSubmit(req.body);
     res.json(data);
   } catch (err) {
-    console.error('生成失败：', err);
-    res.status(err.status || 500).json({ message: err.message || '生成失败' });
+    console.error('提交失败：', err);
+    res.status(err.status || 500).json({ message: err.message || '提交失败' });
+  }
+});
+
+app.post('/api/poll', async (req, res) => {
+  try {
+    const data = await runPoll(req.body);
+    res.json(data);
+  } catch (err) {
+    console.error('轮询失败：', err);
+    res.status(err.status || 500).json({ message: err.message || '轮询失败' });
   }
 });
 

@@ -1,5 +1,5 @@
 const { setCors, readJsonBody, sendJson, sendError } = require('./_helpers');
-const { runSubmit } = require('../lib/generate');
+const { runPoll } = require('../lib/generate');
 
 module.exports = async (req, res) => {
   setCors(res);
@@ -10,10 +10,10 @@ module.exports = async (req, res) => {
 
   try {
     const body = await readJsonBody(req);
-    const data = await runSubmit(body);
+    const data = await runPoll(body);
     return sendJson(res, 200, data);
   } catch (err) {
-    console.error('submit error:', err);
+    console.error('poll error:', err);
     return sendError(res, err);
   }
 };
