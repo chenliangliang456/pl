@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI 批量文生图</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <link rel="preconnect" href="https://images.unsplash.com" crossorigin />
     <style>
       .bg-dots {
@@ -35,7 +36,7 @@
     <main class="mx-auto flex min-h-screen w-full max-w-5xl flex-col px-4 pb-8 sm:px-6">
       <header class="mb-8 text-center">
         <h1 class="text-2xl font-bold tracking-tight text-slate-900 sm:text-4xl">AI 批量文生图</h1>
-        <p class="mt-3 text-sm text-slate-600 sm:text-base">输入描述，一键批量生成多张不同的图片</p>
+        <p class="mt-3 text-sm text-slate-600 sm:text-base">生成 N 张即下载 1 个压缩包，包内包含全部 N 张图片（按序号整理）</p>
       </header>
 
       <form
@@ -57,11 +58,11 @@
               id="count"
               type="number"
               min="1"
-              max="50"
+              max="200"
               value="4"
               class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none ring-sky-500/30 focus:border-sky-300 focus:ring-4"
             />
-            <p id="countHint" class="mt-1 text-xs text-slate-500">范围 1–50，张数越多耗时越长</p>
+            <p id="countHint" class="mt-1 text-xs text-slate-500">范围 1–200，张数越多耗时越长</p>
           </div>
           <div>
             <label class="mb-2 block text-sm font-semibold text-slate-800" for="size">图片尺寸</label>
@@ -112,8 +113,12 @@
           </div>
           <div>
             <p class="text-sm font-medium text-slate-700">生成结果将显示在下方网格</p>
-            <p class="mt-1 text-xs text-slate-500">提交任务后请耐心等待；张数越多耗时越长</p>
+            <p class="mt-1 text-xs text-slate-500">例如生成 50 张，完成后自动下载 1 个 ZIP，内含全部 50 张并按序号命名</p>
           </div>
+        </div>
+        <div id="zipBar" class="mb-4 hidden flex-col gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm sm:flex sm:flex-row sm:items-center sm:justify-between">
+          <p id="zipHint" class="text-sm text-slate-600">—</p>
+          <button id="zipBtn" type="button" class="shrink-0 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">一键下载全部（ZIP）</button>
         </div>
         <div id="grid" class="hidden grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"></div>
       </section>
@@ -130,23 +135,34 @@
       const message = document.getElementById('message');
       const empty = document.getElementById('empty');
       const grid = document.getElementById('grid');
+      const zipBar = document.getElementById('zipBar');
+      const zipBtn = document.getElementById('zipBtn');
+      const zipHint = document.getElementById('zipHint');
 
       const countHint = document.getElementById('countHint');
+      let lastZipBatch = { batchId: '', images: [], expectedTotal: 0 };
 
-      let submitChunk = 50;
-      let maxCount = 50;
+      let submitChunk = 40;
+      let maxCount = 200;
+      let pollHint = { maxAttempts: 60, intervalMs: 3000, fastAttempts: 8, fastIntervalMs: 2000 };
+      const POLL_CONCURRENCY = 10;
+      const SUBMIT_PARALLEL = 2;
+
+      function syncCountUi() {
+        countEl.max = maxCount;
+        countHint.textContent = `范围 1–${maxCount}；生成几张，压缩包里就有几张（1 个 ZIP）`;
+        if (Number(countEl.value) > maxCount) countEl.value = maxCount;
+      }
 
       fetch('/api/health')
         .then((r) => r.json())
         .then((data) => {
-          if (data.maxCount) {
-            maxCount = data.maxCount;
-            countEl.max = maxCount;
-            if (Number(countEl.value) > maxCount) countEl.value = maxCount;
-          }
+          if (data.maxCount) maxCount = data.maxCount;
           if (data.submitChunk) submitChunk = data.submitChunk;
+          if (data.pollHint) pollHint = { ...pollHint, ...data.pollHint };
+          syncCountUi();
         })
-        .catch(() => {});
+        .catch(() => syncCountUi());
 
       function setLoading(loading) {
         submitBtn.disabled = loading;
@@ -154,49 +170,153 @@
         submitText.textContent = loading ? '正在生成，请稍候...' : '开始生成';
       }
 
-      function download(dataUrl, name) {
+      function downloadBlob(blob, name) {
+        const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = dataUrl;
+        a.href = url;
         a.download = name;
         document.body.appendChild(a);
         a.click();
         a.remove();
+        URL.revokeObjectURL(url);
       }
 
-      function render(images) {
+      function extFromMime(mime) {
+        if (mime.includes('jpeg')) return 'jpg';
+        if (mime.includes('webp')) return 'webp';
+        if (mime.includes('gif')) return 'gif';
+        return 'png';
+      }
+
+      function parseDataUrl(dataUrl) {
+        const [meta, base64] = dataUrl.split(',');
+        if (!base64) return null;
+        return { base64, mime: (meta.match(/data:([^;]+)/) || [])[1] || 'image/png' };
+      }
+
+      function zipFileName(count, batchId) {
+        return `AI批量${count}张_${batchId || 'batch'}.zip`;
+      }
+
+      /** 将全部图片打入一个 ZIP：根目录按 001、002… 序号命名，张数与生成成功数一致 */
+      async function buildZip(images, onProgress) {
+        if (typeof JSZip === 'undefined') throw new Error('压缩库未加载，请刷新页面重试');
+
+        const sorted = [...images].sort((a, b) => a.id - b.id);
+        const zip = new JSZip();
+        const padLen = Math.max(3, String(sorted.length).length);
+        const entries = [];
+
+        for (const img of sorted) {
+          const parsed = parseDataUrl(img.dataUrl);
+          if (!parsed) throw new Error(`第 ${img.id} 张图片数据无效，无法打包`);
+          const ext = extFromMime(parsed.mime);
+          const name = `${String(entries.length + 1).padStart(padLen, '0')}.${ext}`;
+          zip.file(name, parsed.base64, { base64: true });
+          entries.push(name);
+        }
+
+        if (entries.length !== sorted.length) {
+          throw new Error(`打包不完整：${entries.length}/${sorted.length} 张`);
+        }
+
+        return zip.generateAsync(
+          {
+            type: 'blob',
+            compression: 'DEFLATE',
+            compressionOptions: { level: 6 }
+          },
+          (meta) => onProgress?.(meta.percent)
+        );
+      }
+
+      function updateZipBar(count, batchId) {
+        const name = zipFileName(count, batchId);
+        zipHint.textContent = `共 ${count} 张，合并为 1 个压缩包：${name}`;
+        zipBtn.textContent = `一键下载全部（${count} 张）`;
+        zipBar.classList.remove('hidden');
+        zipBar.classList.add('flex');
+      }
+
+      async function downloadZip(images, batchId, { expectedTotal, silent = false } = {}) {
+        const count = images.length;
+        if (!count) {
+          if (!silent) message.textContent = '没有可打包的图片';
+          return;
+        }
+
+        zipBtn.disabled = true;
+        const zipName = zipFileName(count, batchId);
+        if (!silent) message.textContent = `正在将 ${count} 张图片打包为 1 个 ZIP（0%）...`;
+
+        try {
+          const blob = await buildZip(images, (pct) => {
+            if (!silent) {
+              message.textContent = `正在将 ${count} 张图片打包为 1 个 ZIP（${Math.round(pct)}%）...`;
+            }
+          });
+
+          downloadBlob(blob, zipName);
+          updateZipBar(count, batchId);
+
+          if (!silent) {
+            const partial =
+              expectedTotal && count < expectedTotal
+                ? `（请求 ${expectedTotal} 张，${expectedTotal - count} 张失败未入包）`
+                : '';
+            message.textContent = `已下载 1 个压缩包，内含 ${count} 张图片${partial}`;
+          }
+        } finally {
+          zipBtn.disabled = false;
+        }
+      }
+
+      zipBtn.addEventListener('click', () => {
+        downloadZip(lastZipBatch.images, lastZipBatch.batchId, {
+          expectedTotal: lastZipBatch.expectedTotal
+        }).catch((err) => (message.textContent = err.message || '打包失败'));
+      });
+
+      function createCard(img) {
+        const card = document.createElement('div');
+        card.className =
+          'overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm';
+
+        const image = document.createElement('img');
+        image.src = img.dataUrl;
+        image.alt = `seed-${img.seed}`;
+        image.className = 'aspect-square w-full object-cover';
+        image.loading = 'lazy';
+
+        const bar = document.createElement('div');
+        bar.className = 'flex items-center justify-between gap-2 border-t border-slate-100 bg-slate-50/80 p-3';
+
+        const seed = document.createElement('span');
+        seed.className = 'text-xs text-slate-500';
+        seed.textContent = `第 ${img.id} 张 · Seed ${img.seed}`;
+
+        bar.append(seed);
+        card.append(image, bar);
+        return card;
+      }
+
+      function showGrid() {
+        empty.classList.add('hidden');
+        grid.classList.remove('hidden');
+      }
+
+      function appendImage(img) {
+        showGrid();
+        grid.appendChild(createCard(img));
+      }
+
+      function resetGrid() {
         grid.innerHTML = '';
-        const has = images.length > 0;
-        empty.classList.toggle('hidden', has);
-        grid.classList.toggle('hidden', !has);
-
-        images.forEach((img) => {
-          const card = document.createElement('div');
-          card.className =
-            'overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm';
-
-          const image = document.createElement('img');
-          image.src = img.dataUrl;
-          image.alt = `seed-${img.seed}`;
-          image.className = 'aspect-square w-full object-cover';
-
-          const bar = document.createElement('div');
-          bar.className = 'flex items-center justify-between gap-2 border-t border-slate-100 bg-slate-50/80 p-3';
-
-          const seed = document.createElement('span');
-          seed.className = 'truncate text-xs text-slate-500';
-          seed.textContent = `Seed: ${img.seed}`;
-
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.textContent = '下载';
-          btn.className =
-            'shrink-0 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-500';
-          btn.onclick = () => download(img.dataUrl, `ai-${img.seed}.png`);
-
-          bar.append(seed, btn);
-          card.append(image, bar);
-          grid.append(card);
-        });
+        empty.classList.remove('hidden');
+        grid.classList.add('hidden');
+        zipBar.classList.add('hidden');
+        zipBar.classList.remove('flex');
+        lastZipBatch = { batchId: '', images: [], expectedTotal: 0 };
       }
 
       async function parseResponse(resp) {
@@ -215,8 +335,12 @@
 
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+      function pollDelay(attempt) {
+        return attempt < pollHint.fastAttempts ? pollHint.fastIntervalMs : pollHint.intervalMs;
+      }
+
       async function pollOneTask(task, batchId) {
-        for (let i = 0; i < 45; i++) {
+        for (let i = 0; i < pollHint.maxAttempts; i++) {
           const resp = await fetch('/api/poll', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -226,27 +350,51 @@
           if (!resp.ok) throw new Error(data.message || '轮询失败');
           if (data.status === 'completed') return data.image;
           if (data.status === 'failed') throw new Error(data.message || '任务失败');
-          await sleep(4000);
+          await sleep(pollDelay(i));
         }
         throw new Error(`任务 ${task.taskId} 超时`);
       }
 
+      async function submitChunkRequest(prompt, size, startId, n, batchId) {
+        const resp = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, count: n, size, startId, batchId })
+        });
+        const { data } = await parseResponse(resp);
+        if (!resp.ok) throw new Error(data.message || '提交失败');
+        return data;
+      }
+
       async function submitAll(prompt, total, size) {
-        const tasks = [];
-        let batchId = null;
+        const chunks = [];
         for (let startId = 1; startId <= total; startId += submitChunk) {
-          const n = Math.min(submitChunk, total - startId + 1);
-          message.textContent = `正在提交任务（${tasks.length}/${total}）...`;
-          const resp = await fetch('/api/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt, count: n, size, startId, batchId })
-          });
-          const { data } = await parseResponse(resp);
-          if (!resp.ok) throw new Error(data.message || '提交失败');
-          batchId = data.batchId;
-          tasks.push(...(data.tasks || []));
+          chunks.push({ startId, n: Math.min(submitChunk, total - startId + 1) });
         }
+
+        let batchId = null;
+        let submitted = 0;
+        const tasks = [];
+
+        const [first, ...rest] = chunks;
+        if (first) {
+          const firstData = await submitChunkRequest(prompt, size, first.startId, first.n, null);
+          batchId = firstData.batchId;
+          tasks.push(...(firstData.tasks || []));
+          submitted += first.n;
+          message.textContent = `正在提交任务（${submitted}/${total}）...`;
+        }
+
+        if (rest.length) {
+          const restLists = await runPool(rest, SUBMIT_PARALLEL, async ({ startId, n }) => {
+            const data = await submitChunkRequest(prompt, size, startId, n, batchId);
+            return data.tasks || [];
+          });
+          tasks.push(...restLists.flat());
+          submitted = tasks.length;
+          message.textContent = `正在提交任务（${submitted}/${total}）...`;
+        }
+
         return { batchId, tasks };
       }
 
@@ -269,6 +417,7 @@
         message.textContent = '正在提交任务...';
 
         try {
+          resetGrid();
           const total = Math.min(maxCount, Math.max(1, Number.parseInt(countEl.value, 10) || 1));
           const { batchId, tasks } = await submitAll(promptEl.value, total, sizeEl.value);
 
@@ -277,16 +426,36 @@
           message.textContent = `已提交 ${tasks.length} 个任务，正在出图（0/${tasks.length}）...`;
 
           let done = 0;
-          const images = await runPool(tasks, 6, async (task) => {
-            const image = await pollOneTask(task, batchId);
-            done += 1;
-            message.textContent = `正在出图（${done}/${tasks.length}）...`;
-            return image;
+          let failed = 0;
+          const batchImages = [];
+
+          await runPool(tasks, POLL_CONCURRENCY, async (task) => {
+            try {
+              const image = await pollOneTask(task, batchId);
+              batchImages.push(image);
+              appendImage(image);
+            } catch {
+              failed += 1;
+            } finally {
+              done += 1;
+              message.textContent = `正在出图（${done}/${total}）${failed ? `，失败 ${failed}` : ''}...`;
+            }
           });
 
-          images.sort((a, b) => a.id - b.id);
-          render(images);
-          message.textContent = `生成完成，共 ${images.length} 张`;
+          batchImages.sort((a, b) => a.id - b.id);
+          lastZipBatch = { batchId, images: batchImages, expectedTotal: total };
+
+          if (batchImages.length) {
+            await downloadZip(batchImages, batchId, { expectedTotal: total, silent: true });
+          }
+
+          if (!batchImages.length) {
+            message.textContent = '全部任务失败，未生成图片';
+          } else if (batchImages.length === total) {
+            message.textContent = `已完成：${total} 张全部入包，已下载 1 个 ZIP（${zipFileName(total, batchId)}）`;
+          } else {
+            message.textContent = `已完成：成功 ${batchImages.length}/${total} 张，已下载 1 个 ZIP（失败 ${failed} 张未入包）`;
+          }
         } catch (err) {
           message.textContent = err.message || '请求失败';
         } finally {
