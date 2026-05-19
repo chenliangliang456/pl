@@ -20,4 +20,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`AI 批量文生图服务已启动：http://0.0.0.0:${PORT}`);
   console.log(`首页：http://0.0.0.0:${PORT}/`);
   console.log(`批量页：http://0.0.0.0:${PORT}/batch.html`);
+  console.log(`健康检查：http://0.0.0.0:${PORT}/api/health`);
 });

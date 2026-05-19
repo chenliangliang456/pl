@@ -61,7 +61,7 @@
               value="4"
               class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none ring-sky-500/30 focus:border-sky-300 focus:ring-4"
             />
-            <p class="mt-1 text-xs text-slate-500">范围 1–300，张数越多耗时越长</p>
+            <p id="countHint" class="mt-1 text-xs text-slate-500">范围 1–300，张数越多耗时越长</p>
           </div>
           <div>
             <label class="mb-2 block text-sm font-semibold text-slate-800" for="size">图片尺寸</label>
@@ -130,6 +130,19 @@
       const message = document.getElementById('message');
       const empty = document.getElementById('empty');
       const grid = document.getElementById('grid');
+
+      const countHint = document.getElementById('countHint');
+
+      fetch('/api/health')
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.maxCount && data.maxCount < 300) {
+            countEl.max = data.maxCount;
+            if (Number(countEl.value) > data.maxCount) countEl.value = data.maxCount;
+            countHint.textContent = `线上环境单次最多 ${data.maxCount} 张（避免超时），本地可更多`;
+          }
+        })
+        .catch(() => {});
 
       function setLoading(loading) {
         submitBtn.disabled = loading;
